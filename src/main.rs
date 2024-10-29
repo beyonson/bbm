@@ -15,7 +15,8 @@ use pac::interrupt;
 use core::mem::MaybeUninit;
 use cortex_m_rt::entry;
 use stm32f1xx_hal::gpio::*;
-use stm32f1xx_hal::{pac, prelude::*, serial::Config};
+use stm32f1xx_hal::serial::*;
+use stm32f1xx_hal::{pac, prelude::*};
 
 static mut INT_PIN: MaybeUninit<stm32f1xx_hal::gpio::gpioa::PA6<Input<Floating>>> =
     MaybeUninit::uninit();
@@ -91,21 +92,14 @@ fn main() -> ! {
 
     // USART3
     // Configure pb10 as a push_pull output, this will be the tx pin
+    let mut afio = p.AFIO.constrain();
     let tx = gpiob.pb10.into_alternate_push_pull(&mut gpiob.crh);
     // Take ownership over pb11
     let rx = gpiob.pb11;
-
-    // Set up the usart device. Take ownership over the USART register and tx/rx pins. The rest of
-    // the registers are used to enable and configure the device.
-    let mut serial = p
-        .USART3
-        .serial((tx, rx), Config::default().baudrate(115200.bps()), &clocks);
-
     {
         // the scope ensures that the int_pin reference is dropped before the first ISR can be executed.
 
         let mut gpioa = p.GPIOA.split();
-        let mut afio = p.AFIO.constrain();
 
         let int_pin = unsafe { &mut *INT_PIN.as_mut_ptr() };
         *int_pin = gpioa.pa6.into_floating_input(&mut gpioa.crl);
@@ -114,20 +108,34 @@ fn main() -> ! {
         int_pin.enable_interrupt(&mut p.EXTI);
     } // initialization ends here
 
+    // Set up the usart device. Take ownership over the USART register and tx/rx pins. The rest of
+    let mut serial = Serial::new(
+       p.USART3,
+       (tx, rx),
+       &mut afio.mapr,
+       Config::default()
+           .baudrate(115200.bps())
+           .wordlength_8bits()
+           .parity_none(),
+       &clocks,
+    );   // the registers are used to enable and configure the device.
+    //let mut serial = p
+    //    .USART3
+    //    .serial((tx, rx), Config::default().baudrate(115200.bps()), &clocks);
+
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::EXTI9_5);
     }
-
 
     loop {
         unsafe {
             if DONE_MOVING == true {
                 for i in 0..32 {
                     let sent = MOVEMENT_BUF[i];
-                    block!(serial.tx.write_u8(sent)).unwrap();
+                    block!(serial.tx.write(sent)).unwrap();
                     DONE_MOVING = false;
                 }
-                block!(serial.tx.write_u8(10)).unwrap();
+                block!(serial.tx.write(10)).unwrap();
             }
         }
     }
